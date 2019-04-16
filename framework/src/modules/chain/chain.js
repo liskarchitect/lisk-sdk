@@ -81,15 +81,15 @@ module.exports = class Chain {
 		);
 
 		this.logger = createLoggerComponent(loggerConfig);
+
 		const dbLogger =
 			storageConfig.logFileName &&
 			storageConfig.logFileName === loggerConfig.logFileName
 				? this.logger
-				: createLoggerComponent(
-						Object.assign({}, loggerConfig, {
-							logFileName: storageConfig.logFileName,
-						})
-				  );
+				: createLoggerComponent({
+						...loggerConfig,
+						logFileName: storageConfig.logFileName,
+				  });
 
 		// Try to get the last git commit
 		try {
@@ -114,6 +114,10 @@ module.exports = class Chain {
 		}
 
 		try {
+			if (!this.options.genesisBlock) {
+				throw Error('Failed to assign nethash from genesis block');
+			}
+
 			// Cache
 			this.logger.debug('Initiating cache...');
 			const cache = createCacheComponent(cacheConfig, this.logger);
@@ -122,15 +126,11 @@ module.exports = class Chain {
 			this.logger.debug('Initiating storage...');
 			const storage = createStorageComponent(storageConfig, dbLogger);
 
-			if (!this.options.genesisBlock) {
-				throw Error('Failed to assign nethash from genesis block');
-			}
-
 			// TODO: For socket cluster child process, should be removed with refactoring of network module
 			this.options.loggerConfig = loggerConfig;
 
 			const self = this;
-			const scope = {
+			self.scope = {
 				lastCommit,
 				ed,
 				build: versionBuild,
@@ -156,23 +156,23 @@ module.exports = class Chain {
 				applicationState: this.applicationState,
 			};
 
-			await bootstrapStorage(scope, global.constants.ACTIVE_DELEGATES);
-			await bootstrapCache(scope);
+			await bootstrapStorage(self.scope, global.constants.ACTIVE_DELEGATES);
+			await bootstrapCache(self.scope);
 
-			scope.bus = await createBus();
-			scope.logic = await initLogicStructure(scope);
-			scope.modules = await initModules(scope);
+			self.scope.bus = await createBus();
+			self.scope.logic = await initLogicStructure(self.scope);
+			self.scope.modules = await initModules(self.scope);
 
-			if (scope.config.network.enabled) {
+			if (self.scope.config.network.enabled) {
 				// Lookup for peers ips from dns
-				scope.config.network.list = await lookupPeerIPs(
-					scope.config.network.list,
-					scope.config.network.enabled
+				self.scope.config.network.list = await lookupPeerIPs(
+					self.scope.config.network.list,
+					self.scope.config.network.enabled
 				);
 
 				// Listen to websockets
-				scope.webSocket = await createSocketCluster(scope);
-				await scope.webSocket.listen();
+				self.scope.webSocket = await createSocketCluster(self.scope);
+				await self.scope.webSocket.listen();
 			} else {
 				this.logger.info(
 					'Skipping P2P server initialization due to the config settings - "peers.enabled" is set to false.'
@@ -180,18 +180,19 @@ module.exports = class Chain {
 			}
 
 			// Ready to bind modules
-			scope.logic.peers.bindModules(scope.modules);
+			self.scope.logic.peers.bindModules(self.scope.modules);
 
 			this.channel.subscribe('app:state:updated', event => {
-				Object.assign(scope.applicationState, event.data);
+				self.scope.applicationState = {
+					...self.scope.applicationState,
+					...event.data,
+				};
 			});
 
 			// Fire onBind event in every module
-			scope.bus.message('bind', scope);
+			self.scope.bus.message('bind', self.scope);
 
 			self.logger.info('Modules ready and launched');
-
-			self.scope = scope;
 		} catch (error) {
 			this.logger.fatal('Chain initialization', {
 				message: error.message,
@@ -315,7 +316,7 @@ module.exports = class Chain {
 		await Promise.all(
 			Object.keys(modules).map(key => {
 				if (typeof modules[key].cleanup === 'function') {
-					return promisify(modules[key].cleanup);
+					return modules[key].cleanup();
 				}
 				return true;
 			})
