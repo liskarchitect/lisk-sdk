@@ -3,11 +3,12 @@ if (process.env.NEW_RELIC_LICENSE_KEY) {
 }
 
 const { promisify } = require('util');
+const { convertErrorsToString } = require('./helpers/error_handlers');
 const git = require('./helpers/git');
 const Sequence = require('./helpers/sequence');
 const ed = require('./helpers/ed');
 // eslint-disable-next-line import/order
-const { ZSchema } = require('../../controller/helpers/validator');
+const { ZSchema } = require('../../controller/validator');
 const { createStorageComponent } = require('../../components/storage');
 const { createCacheComponent } = require('../../components/cache');
 const { createLoggerComponent } = require('../../components/logger');
@@ -136,6 +137,7 @@ module.exports = class Chain {
 				build: versionBuild,
 				config: self.options,
 				genesisBlock: { block: self.options.genesisBlock },
+				registeredTransactions: self.options.registeredTransactions,
 				schema: new ZSchema(),
 				sequence: new Sequence({
 					onWarning(current) {
@@ -181,7 +183,8 @@ module.exports = class Chain {
 
 			// Ready to bind modules
 			self.scope.logic.peers.bindModules(self.scope.modules);
-
+			self.scope.logic.block.bindModules(self.scope.modules);
+      
 			this.channel.subscribe('app:state:updated', event => {
 				self.scope.applicationState = {
 					...self.scope.applicationState,
@@ -308,7 +311,7 @@ module.exports = class Chain {
 				return true;
 			})
 		).catch(moduleCleanupError => {
-			this.logger.error(moduleCleanupError);
+			this.logger.error(convertErrorsToString(moduleCleanupError));
 		});
 
 		this.logger.info('Cleaned up successfully');
